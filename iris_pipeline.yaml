@@ -1,0 +1,287 @@
+# PIPELINE DEFINITION
+# Name: iris-classification-pipeline
+# Description: Pipeline MLOps complet pour la classification Iris
+# Inputs:
+#    input_csv: str [Default: '/data/iris.csv']
+components:
+  comp-charger-donnees:
+    executorLabel: exec-charger-donnees
+    inputDefinitions:
+      parameters:
+        input_csv:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        output_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-entrainer-modeles:
+    executorLabel: exec-entrainer-modeles
+    inputDefinitions:
+      artifacts:
+        input_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+  comp-nettoyer-donnees:
+    executorLabel: exec-nettoyer-donnees
+    inputDefinitions:
+      artifacts:
+        input_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-tester-modele:
+    executorLabel: exec-tester-modele
+    inputDefinitions:
+      artifacts:
+        input_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        input_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-charger-donnees:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - charger_donnees
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef charger_donnees(input_csv: str, output_dataset: dsl.Output[dsl.Dataset]):\n\
+          \    import pandas as pd\n    df = pd.read_csv(input_csv)\n    df.to_csv(output_dataset.path,\
+          \ index=False)\n    print(f\"\u2705 Charg\xE9 : {df.shape}\")\n\n"
+        image: python:3.11-slim
+    exec-entrainer-modeles:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - entrainer_modeles
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.17.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef entrainer_modeles(input_dataset: dsl.Input[dsl.Dataset],\n  \
+          \                    output_model: dsl.Output[dsl.Model]):\n    import pandas\
+          \ as pd\n    import joblib\n    from sklearn.model_selection import train_test_split\n\
+          \    from sklearn.preprocessing import StandardScaler\n    from sklearn.pipeline\
+          \ import Pipeline\n    from sklearn.linear_model import LogisticRegression\n\
+          \    from sklearn.ensemble import RandomForestClassifier\n    from sklearn.neighbors\
+          \ import KNeighborsClassifier\n    from sklearn.metrics import accuracy_score\n\
+          \n    df = pd.read_csv(input_dataset.path)\n    X = df.drop(columns=['variety'])\n\
+          \    y = df['variety']\n    X_train, X_test, y_train, y_test = train_test_split(\n\
+          \        X, y, test_size=0.2, random_state=42, stratify=y\n    )\n    modeles\
+          \ = {\n        \"LogisticRegression\": Pipeline([(\"scaler\", StandardScaler()),\n\
+          \            (\"clf\", LogisticRegression(max_iter=1000, random_state=42))]),\n\
+          \        \"RandomForest\": Pipeline([(\"scaler\", StandardScaler()),\n \
+          \           (\"clf\", RandomForestClassifier(n_estimators=200, random_state=42))]),\n\
+          \        \"KNN\": Pipeline([(\"scaler\", StandardScaler()),\n          \
+          \  (\"clf\", KNeighborsClassifier(n_neighbors=5))]),\n    }\n    meilleur,\
+          \ meilleure_acc, meilleur_pipeline = None, 0, None\n    for nom, pipeline\
+          \ in modeles.items():\n        pipeline.fit(X_train, y_train)\n        acc\
+          \ = accuracy_score(y_test, pipeline.predict(X_test))\n        print(f\"\U0001F539\
+          \ {nom} : {acc:.4f}\")\n        if acc > meilleure_acc:\n            meilleure_acc,\
+          \ meilleur, meilleur_pipeline = acc, nom, pipeline\n    print(f\"\U0001F3C6\
+          \ Meilleur : {meilleur} ({meilleure_acc:.4f})\")\n    joblib.dump(meilleur_pipeline,\
+          \ output_model.path)\n\n"
+        image: python:3.11-slim
+    exec-nettoyer-donnees:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - nettoyer_donnees
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'numpy'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef nettoyer_donnees(input_dataset: dsl.Input[dsl.Dataset],\n   \
+          \                  output_dataset: dsl.Output[dsl.Dataset]):\n    import\
+          \ pandas as pd\n    import numpy as np\n    df = pd.read_csv(input_dataset.path)\n\
+          \    df = df.drop_duplicates()\n    for col in df.select_dtypes(include=[np.number]).columns:\n\
+          \        if df[col].isnull().sum() > 0:\n            df[col] = df[col].fillna(df[col].median())\n\
+          \    df.columns = [c.strip().lower().replace('.', '_') for c in df.columns]\n\
+          \    df.to_csv(output_dataset.path, index=False)\n    print(f\"\u2705 Nettoyage\
+          \ : {df.shape}\")\n\n"
+        image: python:3.11-slim
+    exec-tester-modele:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - tester_modele
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ 'joblib'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.17.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef tester_modele(input_dataset: dsl.Input[dsl.Dataset],\n      \
+          \            input_model: dsl.Input[dsl.Model]):\n    import pandas as pd\n\
+          \    import joblib\n    df = pd.read_csv(input_dataset.path)\n    X = df.drop(columns=['variety'])\n\
+          \    y_vrai = df['variety']\n    modele = joblib.load(input_model.path)\n\
+          \    y_pred = modele.predict(X)\n    acc = (y_pred == y_vrai).mean()\n \
+          \   print(f\"\u2705 Accuracy finale : {acc:.4f}\")\n\n"
+        image: python:3.11-slim
+pipelineInfo:
+  description: Pipeline MLOps complet pour la classification Iris
+  name: iris-classification-pipeline
+root:
+  dag:
+    tasks:
+      charger-donnees:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-charger-donnees
+        inputs:
+          parameters:
+            input_csv:
+              componentInputParameter: input_csv
+        taskInfo:
+          name: charger-donnees
+      entrainer-modeles:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-entrainer-modeles
+        dependentTasks:
+        - nettoyer-donnees
+        inputs:
+          artifacts:
+            input_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_dataset
+                producerTask: nettoyer-donnees
+        taskInfo:
+          name: entrainer-modeles
+      nettoyer-donnees:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-nettoyer-donnees
+        dependentTasks:
+        - charger-donnees
+        inputs:
+          artifacts:
+            input_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_dataset
+                producerTask: charger-donnees
+        taskInfo:
+          name: nettoyer-donnees
+      tester-modele:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-tester-modele
+        dependentTasks:
+        - entrainer-modeles
+        - nettoyer-donnees
+        inputs:
+          artifacts:
+            input_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_dataset
+                producerTask: nettoyer-donnees
+            input_model:
+              taskOutputArtifact:
+                outputArtifactKey: output_model
+                producerTask: entrainer-modeles
+        taskInfo:
+          name: tester-modele
+  inputDefinitions:
+    parameters:
+      input_csv:
+        defaultValue: /data/iris.csv
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.17.0

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iris-data
+  namespace: kubeflow
+data:
+  iris.csv: |
+    # Le contenu du CSV est injecté par le script, pas ici.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: iris-data-loader
+  namespace: kubeflow
+spec:
+  restartPolicy: Always
+  containers:
+    - name: iris-data-container
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      volumeMounts:
+        - name: iris-data-volume
+          mountPath: /data
+          readOnly: true
+  volumes:
+    - name: iris-data-volume
+      configMap:
+        name: iris-data
